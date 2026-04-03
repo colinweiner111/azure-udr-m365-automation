@@ -71,6 +71,8 @@ This solution periodically fetches Microsoft 365 endpoint data from the official
   - Additional Microsoft services and integrations
   - Includes CDN IPs and federated endpoints
 
+Optimize alone is typically much smaller (~18 prefixes as of April 2026), while Optimize + Allow expands to ~2,000+ prefixes.
+
 ### Key Features
 
 - **Timer-triggered execution** (configurable schedule, default: daily)
@@ -322,7 +324,7 @@ az network route-table route list \
 # m365_13_107_6_152_31     13.107.6.152/31     Internet
 # m365_13_107_9_152_31     13.107.9.152/31     Internet
 # m365_20_190_128_0_18     20.190.128.0/18     Internet
-# ...(~2,000 prefixes, which translate to routes)
+# ...(~2,000 prefixes (each becomes a route))
 ```
 
 ---
@@ -341,7 +343,7 @@ az network route-table route list \
 1. **Multiple Route Tables** (Recommended)
    - Create separate route tables for M365 and other traffic
    - Associate different subnets with different tables
-   - ⚠️ **Important:** Azure subnets can only associate with **one route table**. You cannot "stack" multiple route tables on a single subnet to bypass the 400-route limit. To scale beyond 400 routes, you must distribute workloads across multiple subnets, each with its own route table.
+   - To scale beyond 400 routes, distribute workloads across multiple subnets, each with its own route table.
 
 2. **Filter to Optimize Only**
   - Requires code change: modify `M365_API_CATEGORIES` in `function_app.py`
