@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "eastus"
+    },
+    "functionAppName": {
+      "value": "udr-m365-automation"
+    },
+    "storageAccountName": {
+      "value": "udram365REPLACEME"
+    },
+    "containerName": {
+      "value": "m365-routes"
+    },
+    "routeTableNames": {
+      "value": "rt-spoke1,rt-spoke2"
+    },
+    "nextHopType": {
+      "value": "Internet"
+    },
+    "nextHopIp": {
+      "value": ""
+    }
+  }
+}
