@@ -158,4 +158,8 @@ class RouteTableManager:
     @staticmethod
     def _generate_route_name(cidr: str) -> str:
         safe_name = cidr.replace(".", "_").replace("/", "_")
-        return f"m365_{safe_name}"
+        route_name = f"m365_{safe_name}"
+        assert len(route_name) <= 80, (
+            f"Generated route name '{route_name}' exceeds Azure's 80-character limit"
+        )
+        return route_name

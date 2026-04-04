@@ -38,6 +38,7 @@ This Azure Function maintains UDRs for M365 bypass:
 
 1. **Fetches** the latest M365 endpoint data from the official Microsoft API (daily)
 2. **Extracts** IPv4 CIDR blocks from "Optimize" + "Allow" categories (~2,000 IPs)
+   ([Microsoft 365 URLs and IP address ranges](https://learn.microsoft.com/en-us/microsoft-365/enterprise/urls-and-ip-address-ranges?view=o365-worldwide))
 3. **Compares** against previously stored routes (built-in deduplication)
 4. **Creates UDRs** pointing M365 IPs to next hop = `Internet` (bypasses Zscaler)
 5. **Removes stale routes** when Microsoft retires old IP ranges
@@ -362,6 +363,24 @@ az network route-table route list \
 
 ## M365 Endpoint API Details
 
+### Official API Reference
+
+Microsoft publishes M365 endpoint data through a free, unauthenticated REST API:
+
+| Endpoint | URL | Purpose |
+|----------|-----|---------|
+| **Endpoints** | `https://endpoints.office.com/endpoints/worldwide?clientrequestid=<uuid>` | Full list of all M365 IP ranges and URLs, categorized |
+| **Version** | `https://endpoints.office.com/version/worldwide?clientrequestid=<uuid>` | Latest version number — check this before calling Endpoints to avoid unnecessary syncs |
+| **Changes** | `https://endpoints.office.com/changes/worldwide/<version>?clientrequestid=<uuid>` | Delta of IPs added/removed since a specific version |
+
+> **`clientrequestid`** — A stable UUID you generate once and reuse on every call. Microsoft uses it for telemetry and rate-limit tracking. It does **not** authenticate the caller. The API requires this parameter; requests without it return `400 Bad Request`.
+
+**How this function uses the API:**
+1. Calls `/version` to get the current version number
+2. Compares against the version stored in blob state — if unchanged, skips the update entirely
+3. If changed (or first run), calls `/endpoints` and filters to `category = Optimize` or `Allow`
+4. Extracts all `ips` arrays (IPv4 only, skipping any entry containing `:` for IPv6), deduplicates, and sorts
+
 ### API Response Example
 
 The Microsoft 365 endpoints API returns data like:
@@ -410,6 +429,30 @@ Response: {"latest": "2024031902"}
 ```
 
 The function compares versions to avoid unnecessary route updates (optimization).
+
+### Update Frequency & Polling Strategy
+
+Microsoft does not publish M365 endpoint changes on a strict schedule.
+
+- Updates are typically released **monthly**
+- Additional **out-of-band changes** can occur at any time (e.g., incidents, service updates)
+
+Microsoft recommends polling the `/version` endpoint **approximately once per hour** to detect changes:
+https://learn.microsoft.com/en-us/microsoft-365/enterprise/managing-office-365-endpoints
+
+This solution follows a version-based (event-driven) approach:
+
+1. Call `/version` to check the latest version
+2. Compare with the previously stored version
+3. Only call `/endpoints` and update routes if the version has changed
+
+This ensures:
+- No unnecessary route updates
+- Minimal API usage
+- Safe handling of out-of-band changes
+
+> **Note:** The `/version` endpoint is lightweight, so frequent polling has minimal overhead.  
+> In practice, many environments poll less frequently (e.g., every 4–24 hours), but hourly polling aligns with Microsoft guidance.
 
 ---
 

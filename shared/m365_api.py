@@ -1,5 +1,6 @@
 """M365 Endpoint API client."""
 
+import ipaddress
 import logging
 import requests
 from typing import Dict, List, Tuple, Optional
@@ -10,6 +11,10 @@ M365_ENDPOINTS_URL = "https://endpoints.office.com/endpoints/worldwide"
 M365_VERSION_URL = "https://endpoints.office.com/version/worldwide"
 M365_CHANGES_URL = "https://endpoints.office.com/changes/worldwide"
 
+# Stable client ID required by the M365 endpoints API for all requests
+_CLIENT_REQUEST_ID = "f482c14b-4d3c-41e9-a5cd-37eaa8a5cb0e"
+_API_PARAMS = {"clientrequestid": _CLIENT_REQUEST_ID}
+
 
 def get_current_version() -> Optional[int]:
     """Fetch the current version of M365 endpoints.
@@ -18,7 +23,7 @@ def get_current_version() -> Optional[int]:
         The version number or None if request fails.
     """
     try:
-        response = requests.get(M365_VERSION_URL, timeout=10)
+        response = requests.get(M365_VERSION_URL, params=_API_PARAMS, timeout=10)
         response.raise_for_status()
         return response.json().get("latest")
     except requests.RequestException as e:
@@ -39,7 +44,7 @@ def get_endpoints(
         List of endpoint dictionaries.
     """
     try:
-        response = requests.get(M365_ENDPOINTS_URL, timeout=10)
+        response = requests.get(M365_ENDPOINTS_URL, params=_API_PARAMS, timeout=10)
         response.raise_for_status()
         data = response.json()
         logger.info(f"Fetched {len(data)} endpoint groups from M365 API")
@@ -74,9 +79,12 @@ def extract_ipv4_cidrs(endpoints: List[Dict]) -> List[str]:
             continue
         
         for ip in ips:
-            # Skip IPv6 (contains ':')
-            if ":" not in ip:
-                cidrs.add(ip)
+            try:
+                net = ipaddress.ip_network(ip, strict=False)
+                if isinstance(net, ipaddress.IPv4Network):
+                    cidrs.add(ip)
+            except ValueError:
+                logger.warning(f"Skipping invalid CIDR: {ip}")
     
     logger.info(f"Extracted {len(cidrs)} unique IPv4 CIDRs")
     return sorted(cidrs)
@@ -94,6 +102,7 @@ def get_changes_since_version(version: int) -> Tuple[List[str], List[str]]:
     try:
         response = requests.get(
             f"{M365_CHANGES_URL}({version})",
+            params=_API_PARAMS,
             timeout=10
         )
         response.raise_for_status()
@@ -107,16 +116,24 @@ def get_changes_since_version(version: int) -> Tuple[List[str], List[str]]:
         for item in additions:
             ips = item.get("ips", [])
             for ip in ips:
-                if ":" not in ip:  # IPv4 only
-                    added.append(ip)
-        
+                try:
+                    net = ipaddress.ip_network(ip, strict=False)
+                    if isinstance(net, ipaddress.IPv4Network):
+                        added.append(ip)
+                except ValueError:
+                    logger.warning(f"Skipping invalid CIDR in additions: {ip}")
+
         # Parse removals
         removals = data.get("remove", [])
         for item in removals:
             ips = item.get("ips", [])
             for ip in ips:
-                if ":" not in ip:  # IPv4 only
-                    removed.append(ip)
+                try:
+                    net = ipaddress.ip_network(ip, strict=False)
+                    if isinstance(net, ipaddress.IPv4Network):
+                        removed.append(ip)
+                except ValueError:
+                    logger.warning(f"Skipping invalid CIDR in removals: {ip}")
         
         logger.info(f"Changes since v{version}: +{len(added)} -{len(removed)}")
         return sorted(list(set(added))), sorted(list(set(removed)))

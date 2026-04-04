@@ -136,3 +136,7 @@ local.settings.json
 
 # Windows
 Thumbs.db
+
+# Deployment artifacts
+*.zip
+sas_url.txt

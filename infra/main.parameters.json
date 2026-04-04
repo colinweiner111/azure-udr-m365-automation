@@ -3,19 +3,19 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "location": {
-      "value": "eastus"
+      "value": "centralus"
     },
     "functionAppName": {
       "value": "udr-m365-automation"
     },
     "storageAccountName": {
-      "value": "udram365REPLACEME"
+      "value": "udram365cw001"
     },
     "containerName": {
       "value": "m365-routes"
     },
     "routeTableNames": {
-      "value": "rt-spoke1,rt-spoke2"
+      "value": "rt-m365-integration-test"
     },
     "nextHopType": {
       "value": "Internet"
