@@ -140,3 +140,6 @@ Thumbs.db
 # Deployment artifacts
 *.zip
 sas_url.txt
+
+# Test output
+m365_routes_preview.csv

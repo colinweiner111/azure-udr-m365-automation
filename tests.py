@@ -106,6 +106,58 @@ class TestStateManager(unittest.TestCase):
         assert "2.0.0.0/8" in to_remove
 
 
+class TestM365RoutesPreview(unittest.TestCase):
+    """
+    Fetches live M365 endpoint data and writes a preview CSV of all routes
+    this function would create — no Azure credentials required, internet only.
+
+    Output: m365_routes_preview.csv (open in Excel to inspect)
+    """
+
+    def test_fetch_and_write_routes_preview(self):
+        """Fetch real M365 CIDRs and write them to m365_routes_preview.csv."""
+        import csv
+        import urllib.request
+        import uuid
+
+        client_id = str(uuid.uuid4())
+        url = f"https://endpoints.office.com/endpoints/worldwide?clientrequestid={client_id}"
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            endpoints = json.loads(resp.read().decode())
+
+        rows = []
+        for ep in endpoints:
+            category = ep.get("category", "")
+            if category not in ("Optimize", "Allow"):
+                continue
+            service_area = ep.get("serviceArea", "")
+            for ip in ep.get("ips", []):
+                try:
+                    import ipaddress
+                    net = ipaddress.ip_network(ip, strict=False)
+                    if not isinstance(net, ipaddress.IPv4Network):
+                        continue
+                except ValueError:
+                    continue
+                route_name = f"m365_{ip.replace('.', '_').replace('/', '_')}"
+                rows.append({
+                    "route_name": route_name,
+                    "address_prefix": ip,
+                    "next_hop_type": "Internet",
+                    "category": category,
+                    "service_area": service_area,
+                })
+
+        output_path = Path(__file__).parent / "m365_routes_preview.csv"
+        with open(output_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["route_name", "address_prefix", "next_hop_type", "category", "service_area"])
+            writer.writeheader()
+            writer.writerows(rows)
+
+        print(f"\nWrote {len(rows)} routes to {output_path}")
+        self.assertGreater(len(rows), 0, "No routes fetched from M365 API")
+
+
 @unittest.skipIf(
     not (SUBSCRIPTION_ID and RESOURCE_GROUP and ROUTE_TABLE_NAME),
     "Integration tests require SUBSCRIPTION_ID, RESOURCE_GROUP, and ROUTE_TABLE_NAME environment variables"
