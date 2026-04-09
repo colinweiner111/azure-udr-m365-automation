@@ -7,7 +7,7 @@ Automates updating Azure Route Tables (User-Defined Routes) with Microsoft 365 e
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start-3-steps)
-- [NVA (Network Virtual Appliance) Integration](#nva-network-virtual-appliance-integration)
+- [Security Appliance Integration](#security-appliance-integration)
 - [Route Limits & Constraints](#route-limits--constraints)
 - [M365 Endpoint API Details](#m365-endpoint-api-details)
 - [Prerequisites](#prerequisites)
@@ -20,17 +20,17 @@ Automates updating Azure Route Tables (User-Defined Routes) with Microsoft 365 e
 
 ## Challenge & Solution
 
-### The Challenge: NVA (Network Virtual Appliance) & M365 Traffic
+### The Challenge: Security Appliance & M365 Traffic
 
-You've deployed a **Network Virtual Appliance (NVA)** in Azure to inspect HTTP/S traffic. It sits inline in your VNet behind an internal load balancer, and your Route Tables point to it as the next hop for internet-bound traffic.
+You've deployed a **security appliance** (e.g., Zscaler Cloud Connector or similar NVA) in Azure to inspect HTTP/S traffic. It sits inline in your VNet behind an internal load balancer, and your Route Tables point to it as the next hop for internet-bound traffic.
 
-**The situation:** M365 traffic (Teams, Exchange Online, SharePoint Online, etc.) is being forced through the NVA for inspection, which causes:
+**The situation:** M365 traffic (Teams, Exchange Online, SharePoint Online, etc.) is being forced through the security appliance for inspection, which causes:
 - ❌ **Unnecessary latency**: M365 is already trusted; inspection adds delay
 - ❌ **Bandwidth waste**: Inspection of traffic that doesn't need security filtering
 - ❌ **Performance degradation**: Teams calls, file uploads, email delays
 - ❌ **Manual overhead**: M365 publishes 2,000+ IP ranges that change frequently—tracking them manually is error-prone
 
-**Goal:** Route M365 traffic **directly to the Internet** (bypass the NVA), while routing all other traffic through the security appliance.
+**Goal:** Route M365 traffic **directly to the Internet** (bypass the security appliance), while routing all other traffic through it for inspection.
 
 ### The Solution
 
@@ -40,24 +40,24 @@ This Azure Function maintains UDRs for M365 bypass:
 2. **Extracts** IPv4 CIDR blocks from "Optimize" + "Allow" categories (~2,000 IPs)
    ([Microsoft 365 URLs and IP address ranges](https://learn.microsoft.com/en-us/microsoft-365/enterprise/urls-and-ip-address-ranges?view=o365-worldwide))
 3. **Compares** against previously stored routes (built-in deduplication)
-4. **Creates UDRs** pointing M365 IPs to next hop = `Internet` (bypasses the NVA)
+4. **Creates UDRs** pointing M365 IPs to next hop = `Internet` (bypasses the security appliance)
 5. **Removes stale routes** when Microsoft retires old IP ranges
 6. **Tracks state** in Azure Blob Storage for idempotent operations (no duplicates)
 7. **Logs all changes** for audit and compliance
 
-**Result:** M365 traffic bypasses NVA inspection with no manual updates required. Routes stay synchronized as Microsoft adds/removes IPs.
+**Result:** M365 traffic bypasses security appliance inspection with no manual updates required. Routes stay synchronized as Microsoft adds/removes IPs.
 
 **Example Scenario:**
-A spoke VNet with 200 VMs using a default route to the security appliance ILB. After deployment, Teams and Exchange traffic bypass the NVA while all other traffic remains inspected. Administrators get daily digests of IP changes via function logs.
+A spoke VNet with 200 VMs using a default route to a security appliance ILB (e.g., Zscaler Cloud Connector). After deployment, Teams and Exchange traffic bypass the appliance while all other traffic remains inspected. Administrators get daily digests of IP changes via function logs.
 
 ⚠️ **When NOT to use this solution:**
-- If your architecture supports FQDN-based filtering (e.g., proxy/PAC/security appliance policies), that is the preferred Microsoft approach for M365 traffic.
-- Use this solution only when IP-based routing is required (e.g., UDR-only architectures, NVA routing constraints).
+- If your architecture supports FQDN-based filtering (e.g., proxy/PAC files or security appliance URL policies such as Zscaler), that is the preferred Microsoft approach for M365 traffic.
+- Use this solution only when IP-based routing is required (e.g., UDR-only architectures, appliance routing constraints).
 
 **Traffic Flow:**
 ```
 VM → Route for M365 IP (next hop: Internet) → Directly to M365 ✓ Fast, no inspection
-VM → Route for other IPs (next hop: NVA) → Security Appliance → Internet ✓ Inspected
+VM → Route for other IPs (next hop: security appliance) → Security Appliance → Internet ✓ Inspected
 ```
 
 ## Overview
@@ -191,7 +191,7 @@ Edit `infra/main.parameters.json` with your environment values:
 | `nextHopIp` | `10.0.0.4` | ✅ if `nextHopType` is `VirtualAppliance` |
 
 **Why `nextHopType = Internet`?**
-Routes M365 traffic **directly to the Internet**, bypassing your NVA (Network Virtual Appliance). All other traffic continues to route through the security appliance.
+Routes M365 traffic **directly to the Internet**, bypassing your security appliance. All other traffic continues to route through it for inspection.
 
 ### Step 3: Deploy to Azure
 
@@ -219,11 +219,11 @@ az webapp log tail --resource-group <resource-group> --name <function-app-name>
 
 ---
 
-## NVA (Network Virtual Appliance) Integration
+## Security Appliance Integration
 
 ### Architecture Overview
 
-**Typical NVA + M365 Setup:**
+**Typical Security Appliance + M365 Setup** (e.g., Zscaler Cloud Connector or similar NVA):
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -234,9 +234,9 @@ az webapp log tail --resource-group <resource-group> --name <function-app-name>
 │  │   Subnet        │         │ Balancer (ILB)       │  │
 │  │                 │         │                      │  │
 │  │ UDRs:           │────────▶│ Security Appliance   │  │
-│  │ - Default:      │         │ NVA (VM)             │  │
+│  │ - Default:      │         │ (VM / NVA)           │  │
 │  │   next hop =    │         │                      │  │
-│  │   NVA ILB       │         │ Forwards to Internet │  │
+│  │   appliance ILB │         │ Forwards to Internet │  │
 │  │                 │         │ (inspected)          │  │
 │  │ - M365 CIDRs:   │         └──────────────────────┘  │
 │  │   next hop =    │                                    │
@@ -254,7 +254,7 @@ az webapp log tail --resource-group <resource-group> --name <function-app-name>
 │        │ Exchange       │         │ Internal apps│   │
 │        │ SharePoint     │         │              │   │
 │        │                │         │ (goes via    │   │
-│        │ (direct, fast) │         │  NVA)       │   │
+│        │ (direct, fast) │         │  appliance) │   │
 │        └────────────────┘         └──────────────┘   │
 │             └──────────────┬──────────────┘           │
 │                            ▼                          │
@@ -267,18 +267,18 @@ az webapp log tail --resource-group <resource-group> --name <function-app-name>
 
 ### How It Works
 
-1. **Default Route Table** (all subnets): Next hop = NVA ILB
+1. **Default Route Table** (all subnets): Next hop = security appliance ILB
    - All traffic routes through the security appliance for inspection
 
 2. **M365 Route Table** OR **M365 routes in existing table**: Next hop = Internet
-   - M365 IPs bypass the NVA, go directly to internet
+   - M365 IPs bypass the security appliance, go directly to internet
    - **This function creates/maintains these routes automatically**
 
 ### Setup Steps
 
 For each subnet that needs M365 bypass:
 
-If your subnet already has a route table (for example, `0.0.0.0/0` to the NVA ILB), add M365 routes to that existing table rather than creating a new one. Re-associating a subnet to a different route table replaces the previous association.
+If your subnet already has a route table (for example, `0.0.0.0/0` to the security appliance ILB), add M365 routes to that existing table rather than creating a new one. Re-associating a subnet to a different route table replaces the previous association.
 
 ```bash
 # Create a route table for M365 bypass (only if one does not already exist)
@@ -303,9 +303,9 @@ export ROUTE_TABLE_NAMES="rt-m365-bypass"
 
 Azure uses **longest prefix match** for routing:
 - M365 route `/32` or `/24` (specific): matches first → goes to Internet
-- Default route `0.0.0.0/0`: matches if no more specific route → goes to NVA
+- Default route `0.0.0.0/0`: matches if no more specific route → goes to security appliance
 
-✓ M365 IPs automatically bypass the NVA  
+✓ M365 IPs automatically bypass the security appliance  
 ✓ Everything else goes through the security appliance  
 
 ### Verification
