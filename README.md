@@ -164,10 +164,17 @@ azure-udr-m365-automation/
 
 ## Quick Start: 3 Steps
 
+### Step 0: Clone the Repo
+
+```bash
+git clone https://github.com/colinweiner111/azure-udr-m365-automation.git
+cd azure-udr-m365-automation
+```
+
 ### Step 1: Run Tests (Verify Code Works)
 
 ```bash
-# Install dependencies
+# Install dependencies (Python 3.11+ required)
 pip install -r requirements-dev.txt
 
 # Run all tests (unit + integration against real Azure)
