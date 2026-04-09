@@ -111,33 +111,98 @@ class TestM365RoutesPreview(unittest.TestCase):
     Fetches live M365 endpoint data and writes a preview CSV of all routes
     this function would create — no Azure credentials required, internet only.
 
-    Output: m365_routes_preview.csv (open in Excel to inspect)
+    Outputs:
+      m365_routes_preview.csv  — open in Excel to inspect all routes
+      m365_routes_preview.log  — step-by-step log of what happened
     """
 
     def test_fetch_and_write_routes_preview(self):
         """Fetch real M365 CIDRs and write them to m365_routes_preview.csv."""
         import csv
+        import ipaddress
+        import logging
         import urllib.request
         import uuid
+        from datetime import datetime, timezone
 
+        base_path = Path(__file__).parent
+        log_path = base_path / "m365_routes_preview.log"
+        output_path = base_path / "m365_routes_preview.csv"
+
+        # Set up a logger that writes to both the log file and stdout
+        log = logging.getLogger("m365_preview")
+        log.setLevel(logging.DEBUG)
+        log.handlers.clear()
+        fh = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        ch = logging.StreamHandler()
+        ch.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%H:%M:%S"))
+        log.addHandler(fh)
+        log.addHandler(ch)
+
+        log.info("=" * 60)
+        log.info("  M365 Routes Preview")
+        log.info("  This test shows exactly what the Azure Function would do")
+        log.info("  when it runs — no Azure credentials required")
+        log.info("=" * 60)
+        log.info(f"Started at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        log.info("")
+
+        # Step 1: Fetch version
+        log.info("--- Step 1: Check M365 endpoint version ---")
+        version_client_id = str(uuid.uuid4())
+        version_url = f"https://endpoints.office.com/version/worldwide?clientrequestid={version_client_id}"
+        log.info(f"Calling version API: {version_url}")
+        with urllib.request.urlopen(version_url, timeout=15) as resp:
+            version_data = json.loads(resp.read().decode())
+        current_version = version_data.get("latest", "unknown")
+        log.info(f"Current M365 endpoint version: {current_version}")
+        log.info("(The function compares this against the last stored version.")
+        log.info(" If unchanged, it skips the update entirely — no Azure calls made.)")
+        log.info("")
+
+        # Step 2: Fetch endpoints
+        log.info("--- Step 2: Fetch full endpoint list ---")
         client_id = str(uuid.uuid4())
         url = f"https://endpoints.office.com/endpoints/worldwide?clientrequestid={client_id}"
+        log.info(f"Calling endpoints API: {url}")
         with urllib.request.urlopen(url, timeout=15) as resp:
             endpoints = json.loads(resp.read().decode())
+        log.info(f"Received {len(endpoints)} endpoint records from Microsoft")
+        all_categories = {}
+        for ep in endpoints:
+            cat = ep.get("category", "unknown")
+            all_categories[cat] = all_categories.get(cat, 0) + 1
+        log.info("Breakdown of all records by category (before filtering):")
+        for cat, count in sorted(all_categories.items()):
+            log.info(f"  {cat}: {count} records")
+        log.info("")
 
+        # Step 3: Filter and extract IPv4 CIDRs
+        log.info("--- Step 3: Filter to 'Optimize' + 'Allow', extract IPv4 CIDRs ---")
+        log.info("Reason: 'Default' category traffic is not M365-critical and does not need bypass")
+        log.info("Reason: IPv6 routes are skipped — Azure UDRs are IPv4 only in this solution")
         rows = []
+        skipped_ipv6 = 0
+        skipped_category = 0
+        counts_by_category = {}
+        counts_by_service = {}
+
         for ep in endpoints:
             category = ep.get("category", "")
             if category not in ("Optimize", "Allow"):
+                skipped_category += 1
                 continue
             service_area = ep.get("serviceArea", "")
             for ip in ep.get("ips", []):
                 try:
-                    import ipaddress
                     net = ipaddress.ip_network(ip, strict=False)
                     if not isinstance(net, ipaddress.IPv4Network):
+                        skipped_ipv6 += 1
+                        log.debug(f"  Skipping IPv6: {ip}")
                         continue
                 except ValueError:
+                    log.warning(f"  Skipping invalid CIDR: {ip}")
                     continue
                 route_name = f"m365_{ip.replace('.', '_').replace('/', '_')}"
                 rows.append({
@@ -147,14 +212,62 @@ class TestM365RoutesPreview(unittest.TestCase):
                     "category": category,
                     "service_area": service_area,
                 })
+                counts_by_category[category] = counts_by_category.get(category, 0) + 1
+                counts_by_service[service_area] = counts_by_service.get(service_area, 0) + 1
 
-        output_path = Path(__file__).parent / "m365_routes_preview.csv"
+        log.info(f"Skipped {skipped_category} records (category not Optimize/Allow)")
+        log.info(f"Skipped {skipped_ipv6} IPv6 entries")
+        log.info(f"Extracted {len(rows)} IPv4 routes to create")
+        log.info("")
+        log.info("Routes by category:")
+        for cat, count in sorted(counts_by_category.items()):
+            log.info(f"  {cat}: {count} routes")
+        log.info("")
+        log.info("Routes by service area:")
+        for svc, count in sorted(counts_by_service.items(), key=lambda x: -x[1]):
+            log.info(f"  {svc}: {count} routes")
+        log.info("")
+
+        # Step 4: Show Azure route table impact
+        log.info("--- Step 4: Azure Route Table impact assessment ---")
+        azure_limit = 400
+        log.info(f"Azure route table limit: {azure_limit} routes per table")
+        log.info(f"Total routes this function would create: {len(rows)}")
+        if len(rows) > azure_limit:
+            tables_needed = -(-len(rows) // azure_limit)  # ceiling division
+            log.warning(f"WARNING: {len(rows)} routes exceeds the {azure_limit}-route limit!")
+            log.warning(f"You would need at least {tables_needed} route tables to hold all routes.")
+            log.warning("Consider filtering to 'Optimize' only, or distributing across multiple subnets.")
+        else:
+            log.info(f"OK: {len(rows)} routes fits within a single route table (limit: {azure_limit})")
+        log.info("")
+
+        # Step 5: Show a sample of what routes look like
+        log.info("--- Step 5: Sample of routes that would be created (first 10) ---")
+        log.info(f"  {'ROUTE NAME':<40} {'CIDR':<20} {'CATEGORY':<10} SERVICE AREA")
+        log.info(f"  {'-'*40} {'-'*20} {'-'*10} {'-'*20}")
+        for row in rows[:10]:
+            log.info(f"  {row['route_name']:<40} {row['address_prefix']:<20} {row['category']:<10} {row['service_area']}")
+        if len(rows) > 10:
+            log.info(f"  ... and {len(rows) - 10} more (see CSV for full list)")
+        log.info("")
+
+        # Step 6: Write CSV
+        log.info("--- Step 6: Write full route list to CSV ---")
+        log.info(f"Output file: {output_path}")
         with open(output_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=["route_name", "address_prefix", "next_hop_type", "category", "service_area"])
             writer.writeheader()
             writer.writerows(rows)
+        log.info(f"CSV written: {len(rows)} routes + header row")
+        log.info("Open m365_routes_preview.csv in Excel to browse the full list")
+        log.info("")
+        log.info("=" * 60)
+        log.info(f"  Preview complete. M365 version: {current_version}")
+        log.info(f"  {len(rows)} routes would be created across your route tables")
+        log.info(f"  Log saved to: {log_path}")
+        log.info("=" * 60)
 
-        print(f"\nWrote {len(rows)} routes to {output_path}")
         self.assertGreater(len(rows), 0, "No routes fetched from M365 API")
 
 

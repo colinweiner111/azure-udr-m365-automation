@@ -171,7 +171,24 @@ git clone https://github.com/colinweiner111/azure-udr-m365-automation.git
 cd azure-udr-m365-automation
 ```
 
-### Step 1: Run Tests (Verify Code Works)
+### Step 0.5: Log in to Azure
+
+Before deploying you need to authenticate via the Azure CLI:
+
+```powershell
+az login
+```
+
+If you have multiple subscriptions, set the correct one:
+
+```powershell
+az account set --subscription "<subscription-id-or-name>"
+
+# Verify the right subscription is active
+az account show --query "{name:name, id:id}" -o table
+```
+
+### Step 1: Run Tests *(optional)*
 
 ```bash
 # Install dependencies (Python 3.11+ required)
@@ -187,6 +204,15 @@ python -m pytest tests.py -v
 - 4 integration tests create/delete a real route in Azure and verify end-to-end
 - All 11 tests should pass ✅ (integration tests skipped if env vars not set)
 
+**Test output files** (created automatically, not committed to git):
+
+| File | Description |
+|------|-------------|
+| `m365_routes_preview.csv` | Every route the function would create — route name, CIDR, next hop, category, service area. Open in Excel to browse. |
+| `m365_routes_preview.log` | Step-by-step log of the preview run — version fetched, records filtered, IPv6 skipped, route table impact assessment, and a sample of the first 10 routes. |
+
+These files are a preview only — no Azure connection required to generate them.
+
 ### Step 2: Configure Deployment Parameters
 
 Edit `infra/main.parameters.json` with your environment values:
@@ -199,8 +225,47 @@ Edit `infra/main.parameters.json` with your environment values:
 | `nextHopType` | `Internet` | Optional (default: `Internet`) |
 | `nextHopIp` | `10.0.0.4` | ✅ if `nextHopType` is `VirtualAppliance` |
 
-**Why `nextHopType = Internet`?**
-Routes M365 traffic **directly to the Internet**, bypassing your security appliance. All other traffic continues to route through it for inspection.
+#### `functionAppName`
+The name of the Azure Function App to create. Must be globally unique across Azure (it becomes part of the URL: `<name>.azurewebsites.net`).
+- Use lowercase letters, numbers, and hyphens only
+- Example: `udr-m365-contoso-prod`
+
+#### `storageAccountName`
+The Azure Storage Account used for two purposes: function runtime state (queues, tables) and M365 route state (blob). Must be globally unique across all of Azure.
+- 3–24 characters, lowercase letters and numbers only, no hyphens
+- Example: `udram365contoso001`
+- Tip: combine a prefix + your org name + a short suffix to ensure uniqueness
+
+#### `routeTableNames`
+Comma-separated list of Azure Route Table names this function will manage. The route tables must already exist in the same resource group.
+- Single table: `rt-m365-bypass`
+- Multiple tables: `rt-spoke1,rt-spoke2,rt-spoke3`
+- ⚠️ Azure limits each route table to ~400 routes. If M365 publishes more than 400 CIDRs (currently ~1,800+ for Optimize + Allow), distribute them across multiple subnets each with their own route table — or filter to "Optimize" only (~18 routes).
+
+#### `nextHopType`
+Controls where M365 traffic is sent:
+- `Internet` *(default)* — M365 traffic goes **directly to the internet**, bypassing your security appliance. Use this in most cases.
+- `VirtualAppliance` — M365 traffic is sent to a specific IP (e.g., a secondary NVA or firewall). Requires `nextHopIp` to be set.
+
+#### `nextHopIp`
+Only required when `nextHopType` is `VirtualAppliance`. Set this to the private IP address of your NVA or internal load balancer.
+- Example: `10.0.1.4`
+- Leave blank (`""`) when using `nextHopType = Internet`
+
+**Example `main.parameters.json`:**
+```json
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "functionAppName":    { "value": "udr-m365-contoso-prod" },
+    "storageAccountName": { "value": "udram365contoso001" },
+    "routeTableNames":    { "value": "rt-spoke1,rt-spoke2" },
+    "nextHopType":        { "value": "Internet" },
+    "nextHopIp":          { "value": "" }
+  }
+}
+```
 
 ### Step 3: Deploy to Azure
 
