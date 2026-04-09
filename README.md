@@ -434,15 +434,13 @@ The function compares versions to avoid unnecessary route updates (optimization)
 
 ### Update Frequency & Polling Strategy
 
-Microsoft does not publish M365 endpoint changes on a strict schedule.
+From the [Microsoft 365 IP web service documentation](https://learn.microsoft.com/en-us/microsoft-365/enterprise/microsoft-365-ip-web-service?view=o365-worldwide):
 
-- Updates are typically released **monthly**
-- Additional **out-of-band changes** can occur at any time (e.g., incidents, service updates)
+> Microsoft updates the Microsoft 365 IP address and FQDN entries at the beginning of each month. Out-of-band updates are sometimes published due to support incidents, security updates, or other operational requirements.
+>
+> The data for each published instance is assigned a version number, and the version web method enables you to check for the latest version of each Microsoft 365 service instance. We recommend that you check the version not more than once an hour.
 
-Microsoft recommends polling the `/version` endpoint **approximately once per hour** to detect changes:
-https://learn.microsoft.com/en-us/microsoft-365/enterprise/managing-office-365-endpoints
-
-This solution follows a version-based (event-driven) approach:
+This solution follows that guidance — version-based polling with a daily timer (configurable):
 
 1. Call `/version` to check the latest version
 2. Compare with the previously stored version
@@ -452,9 +450,6 @@ This ensures:
 - No unnecessary route updates
 - Minimal API usage
 - Safe handling of out-of-band changes
-
-> **Note:** The `/version` endpoint is lightweight, so frequent polling has minimal overhead.  
-> In practice, many environments poll less frequently (e.g., every 4–24 hours), but hourly polling aligns with Microsoft guidance.
 
 ---
 
