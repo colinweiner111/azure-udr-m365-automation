@@ -62,7 +62,9 @@ VM → Route for other IPs (next hop: security appliance) → Security Appliance
 
 ## Overview
 
-This solution periodically fetches Microsoft 365 endpoint data from the official M365 API, extracts IPv4 CIDR blocks from the "Optimize" and "Allow" categories, and maintains Azure Route Tables with the latest IP ranges. It uses version tracking and state management to minimize unnecessary route updates.
+This solution periodically fetches Microsoft 365 endpoint data from the [official M365 IP web service](https://learn.microsoft.com/en-us/microsoft-365/enterprise/microsoft-365-ip-web-service?view=o365-worldwide), extracts IPv4 CIDR blocks, and maintains Azure Route Tables with the latest IP ranges. It uses version tracking and state management to minimize unnecessary route updates.
+
+By default (`function_app.py` line 69), the function fetches both **"Optimize"** and **"Allow"** categories. This is configurable — see [Why "Optimize" + "Allow"?](#why-optimize--allow) below.
 
 ### Why "Optimize" + "Allow"?
 
