@@ -8,6 +8,7 @@ from typing import List
 from shared.m365_api import get_current_version, get_endpoints, extract_ipv4_cidrs
 from shared.state_manager import StateManager
 from shared.route_manager import RouteTableManager
+from shared.run_logger import RunLogger
 
 
 # Configure structured logging
@@ -20,23 +21,22 @@ logger = logging.getLogger(__name__)
 app = func.FunctionApp()
 
 
+@app.route(route="run", auth_level=func.AuthLevel.FUNCTION)
+def run_http(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP trigger to manually invoke the route sync — for portal/demo use."""
+    _sync_routes()
+    return func.HttpResponse("Route sync complete.", status_code=200)
+
+
 @app.schedule(schedule="0 0 0 * * *", arg_name="mytimer", run_on_startup=False,
               use_monitor=False)
 def update_m365_routes(mytimer: func.TimerRequest) -> None:
-    """
-    Timer-triggered function to update Azure Route Tables with M365 endpoints.
+    """Timer-triggered daily route sync."""
+    _sync_routes()
 
-    Runs daily (configurable via schedule parameter above).
 
-    Environment variables:
-        SUBSCRIPTION_ID: Azure subscription ID
-        RESOURCE_GROUP: Resource group containing route tables
-        ROUTE_TABLE_NAMES: Comma-separated route table names
-        STORAGE_ACCOUNT_NAME: Azure Storage account name
-        CONTAINER_NAME: Blob container for state storage
-        NEXT_HOP_TYPE: "Internet" or "VirtualAppliance" (default: Internet)
-        NEXT_HOP_IP: IP address if NEXT_HOP_TYPE is VirtualAppliance
-    """
+def _sync_routes() -> None:
+    """Core sync logic shared by both the timer and HTTP triggers."""
 
     # Parse configuration
     config = parse_config()
@@ -44,10 +44,11 @@ def update_m365_routes(mytimer: func.TimerRequest) -> None:
         logger.error("Failed to parse configuration")
         return
 
+    run_logger = RunLogger(config["storage_account_name"])
+
     logger.info("=" * 80)
     logger.info("Starting M365 Route Table Update Function")
     logger.info(f"Route tables: {config['route_table_names']}")
-    logger.info(f"Timer trigger: past_due={mytimer.past_due if mytimer else 'manual'}")
 
     try:
         # Initialize managers
@@ -65,8 +66,8 @@ def update_m365_routes(mytimer: func.TimerRequest) -> None:
         )
 
         # Fetch M365 endpoints
-        logger.info("Fetching M365 endpoints...")
-        endpoints = get_endpoints(categories=["Optimize", "Allow"])
+        logger.info(f"Fetching M365 endpoints (categories: {config['m365_categories']})...")
+        endpoints = get_endpoints(categories=config["m365_categories"])
         if not endpoints:
             logger.error("Failed to fetch M365 endpoints")
             return
@@ -83,15 +84,26 @@ def update_m365_routes(mytimer: func.TimerRequest) -> None:
         else:
             logger.info(f"M365 version: {current_version}")
 
-        # Calculate diff
+        # Calculate diff against saved state (M365 endpoint changes)
         to_add, to_remove = state_mgr.get_diff(new_cidrs)
 
-        # If no changes, exit early
+        # Detect route table drift: routes that should exist but were deleted
+        current_routes_by_table = route_mgr.get_current_routes()
+        all_current_routes = set()
+        for routes in current_routes_by_table.values():
+            all_current_routes.update(routes)
+
+        drifted = sorted(set(new_cidrs) - all_current_routes - set(to_remove))
+        if drifted:
+            logger.warning(f"Detected {len(drifted)} drifted route(s) missing from route table: {drifted}")
+            to_add = sorted(set(to_add) | set(drifted))
+
+        # If no changes and no drift, exit early
         if not to_add and not to_remove:
             logger.info("No changes detected, exiting")
             return
 
-        logger.info(f"Changes detected: +{len(to_add)} -{len(to_remove)}")
+        logger.info(f"Changes detected: +{len(to_add)} -{len(to_remove)} (includes {len(drifted)} drifted)")
 
         # Apply changes to route tables
         add_summary = None
@@ -118,11 +130,38 @@ def update_m365_routes(mytimer: func.TimerRequest) -> None:
             to_add,
             to_remove,
             add_summary,
-            remove_summary
+            remove_summary,
+            drifted
+        )
+
+        run_logger.write(
+            m365_version=current_version,
+            total_routes=len(new_cidrs),
+            added=to_add,
+            removed=to_remove,
+            drift_restored=drifted,
+            add_succeeded=add_summary["added"] if add_summary else 0,
+            add_failed=add_summary["failed"] if add_summary else 0,
+            remove_succeeded=remove_summary["removed"] if remove_summary else 0,
+            remove_failed=remove_summary["failed"] if remove_summary else 0,
+            result="success"
         )
 
     except Exception as e:
         logger.exception(f"Error in main function: {e}")
+        run_logger.write(
+            m365_version=None,
+            total_routes=0,
+            added=[],
+            removed=[],
+            drift_restored=[],
+            add_succeeded=0,
+            add_failed=0,
+            remove_succeeded=0,
+            remove_failed=0,
+            result="error",
+            error=str(e)
+        )
         raise
 
 
@@ -144,6 +183,11 @@ def parse_config() -> dict:
         "container_name": os.getenv("CONTAINER_NAME"),
         "next_hop_type": os.getenv("NEXT_HOP_TYPE", "Internet"),
         "next_hop_ip": os.getenv("NEXT_HOP_IP"),
+        "m365_categories": [
+            c.strip()
+            for c in os.getenv("M365_CATEGORIES", "Optimize,Allow").split(",")
+            if c.strip()
+        ],
     }
 
     # Validate required settings
@@ -184,23 +228,41 @@ def log_summary(
     to_add: List[str],
     to_remove: List[str],
     add_summary: dict,
-    remove_summary: dict
+    remove_summary: dict,
+    drifted: List[str] = None
 ) -> None:
     """Log execution summary."""
+    drifted = drifted or []
+    drifted_set = set(drifted)
+    m365_new = [r for r in to_add if r not in drifted_set]
+
     logger.info("=" * 80)
     logger.info("EXECUTION SUMMARY")
     logger.info("=" * 80)
-    logger.info(f"M365 Version: {version}")
-    logger.info(f"Total CIDRs: {total_cidrs}")
-    logger.info(f"Routes to Add: {len(to_add)}")
-    logger.info(f"Routes to Remove: {len(to_remove)}")
+    logger.info(f"M365 Version:    {version}")
+    logger.info(f"Total CIDRs:     {total_cidrs}")
+    logger.info(f"Routes Added:    {len(to_add)} ({len(drifted)} drift restores, {len(m365_new)} new from M365)")
+    logger.info(f"Routes Removed:  {len(to_remove)} (retired from M365)")
+
+    if drifted:
+        logger.info(f"  Drift restored:  {', '.join(drifted)}")
+    if m365_new:
+        logger.info(f"  New M365 routes: {', '.join(m365_new)}")
+    if to_remove:
+        logger.info(f"  Removed routes:  {', '.join(to_remove)}")
 
     if add_summary:
-        logger.info(f"Add Results: {add_summary['added']} added, "
-                    f"{add_summary['failed']} failed")
+        logger.info(f"Add result:      {add_summary['added']} succeeded, {add_summary['failed']} failed")
+        if add_summary.get('failed'):
+            for table, t in add_summary.get('tables', {}).items():
+                for err in t.get('errors', []):
+                    logger.error(f"  [{table}] {err}")
 
     if remove_summary:
-        logger.info(f"Remove Results: {remove_summary['removed']} removed, "
-                    f"{remove_summary['failed']} failed")
+        logger.info(f"Remove result:   {remove_summary['removed']} succeeded, {remove_summary['failed']} failed")
+        if remove_summary.get('failed'):
+            for table, t in remove_summary.get('tables', {}).items():
+                for err in t.get('errors', []):
+                    logger.error(f"  [{table}] {err}")
 
     logger.info("=" * 80)

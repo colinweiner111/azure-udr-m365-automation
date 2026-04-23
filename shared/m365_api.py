@@ -2,6 +2,7 @@
 
 import ipaddress
 import logging
+import os
 import requests
 from typing import Dict, List, Tuple, Optional
 
@@ -11,8 +12,10 @@ M365_ENDPOINTS_URL = "https://endpoints.office.com/endpoints/worldwide"
 M365_VERSION_URL = "https://endpoints.office.com/version/worldwide"
 M365_CHANGES_URL = "https://endpoints.office.com/changes/worldwide"
 
-# Stable client ID required by the M365 endpoints API for all requests
-_CLIENT_REQUEST_ID = "f482c14b-4d3c-41e9-a5cd-37eaa8a5cb0e"
+# Stable client ID required by the M365 endpoints API for all requests.
+# Override per-deployment via the M365_CLIENT_REQUEST_ID environment variable
+# to avoid rate-limit collisions across unrelated deployments of this function.
+_CLIENT_REQUEST_ID = os.environ.get("M365_CLIENT_REQUEST_ID", "f482c14b-4d3c-41e9-a5cd-37eaa8a5cb0e")
 _API_PARAMS = {"clientrequestid": _CLIENT_REQUEST_ID}
 
 
@@ -90,6 +93,8 @@ def extract_ipv4_cidrs(endpoints: List[Dict]) -> List[str]:
     return sorted(cidrs)
 
 
+# TODO: wire this up as an optimization — use /changes endpoint for delta updates
+# instead of full sync. See README "Future Enhancements" section.
 def get_changes_since_version(version: int) -> Tuple[List[str], List[str]]:
     """Get added and removed changes since a specific version.
     

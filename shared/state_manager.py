@@ -3,7 +3,7 @@
 import json
 import logging
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 from azure.storage.blob import BlobClient
 from azure.identity import DefaultAzureCredential
 
@@ -76,7 +76,7 @@ class StateManager:
             state = {
                 "version": version,
                 "cidrs": sorted(cidrs),
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
             }
             blob_data = json.dumps(state, indent=2)
             self.blob_client.upload_blob(blob_data, overwrite=True)

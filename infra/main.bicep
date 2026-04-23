@@ -10,7 +10,7 @@ param location string = resourceGroup().location
 @description('Name of the Azure Function App.')
 param functionAppName string
 
-@description('Comma-separated list of Azure Route Table names to manage.')
+@description('Comma-separated list of Azure Route Table names to manage. Note: Bicep provisions only the first table in this list. Any additional tables must be pre-created before deployment.')
 param routeTableNames string
 
 @description('Next hop type for M365 routes.')
@@ -25,6 +25,9 @@ param storageAccountName string
 
 @description('Blob container name for M365 route state.')
 param containerName string = 'm365-routes'
+
+@description('Comma-separated M365 endpoint categories to include in route tables (Optimize, Allow, Default).')
+param m365Categories string = 'Optimize,Allow'
 
 // Route Table for M365 UDRs
 resource routeTable 'Microsoft.Network/routeTables@2023-09-01' = {
@@ -78,6 +81,22 @@ resource stateContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
   }
 }
 
+resource runLogsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'run-logs'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource packageContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'scm-releases'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 // Consumption plan (Linux)
 resource hostingPlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: '${functionAppName}-plan'
@@ -94,6 +113,19 @@ resource hostingPlan 'Microsoft.Web/serverfarms@2023-12-01' = {
 
 // Account key connection string — scoped only to WEBSITE_CONTENTAZUREFILECONNECTIONSTRING (Azure Files mount).
 // AzureWebJobsStorage uses managed identity instead (see RBAC assignments below).
+//
+// Why not a Key Vault reference?
+// WEBSITE_CONTENTAZUREFILECONNECTIONSTRING is resolved by the Azure Files infrastructure
+// layer at host boot, before the Functions runtime initializes. Key Vault reference
+// resolution happens inside the runtime — so for this specific setting it is always
+// too late. This is a known platform limitation with no current workaround on
+// Consumption plan Linux. It is also why allowSharedKeyAccess: true is required on
+// the storage account above. All other secrets in this deployment use managed identity
+// and do not require Key Vault. See https://aka.ms/functions-storage-managed-identity
+//
+// Security note: listKeys() is evaluated by ARM at deploy time. The resulting connection
+// string is persisted in ARM deployment history. Scope */read access on this resource
+// group tightly in production, or use deployment stacks to control history retention.
 var storageFileConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storageAccount.listKeys().keys[0].value}'
 
 // Function App with System-Assigned Managed Identity
@@ -120,7 +152,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'AzureWebJobsStorage__queueServiceUri', value: 'https://${storageAccount.name}.queue.${environment().suffixes.storage}' }
         { name: 'AzureWebJobsStorage__tableServiceUri', value: 'https://${storageAccount.name}.table.${environment().suffixes.storage}' }
         { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
-        // Azure Files content share requires account key (no managed identity support for SMB on consumption plan)
+        // Azure Files content share requires account key (KV references unsupported for this setting — see comment above)
         { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING', value: storageFileConnectionString }
         { name: 'WEBSITE_CONTENTSHARE', value: toLower(functionAppName) }
         { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
@@ -137,6 +169,11 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'CONTAINER_NAME', value: containerName }
         { name: 'NEXT_HOP_TYPE', value: nextHopType }
         { name: 'NEXT_HOP_IP', value: nextHopIp }
+        // Optional: set a deployment-specific UUID to avoid rate-limit collisions on the M365 endpoints API
+        { name: 'M365_CLIENT_REQUEST_ID', value: '' }
+        { name: 'M365_CATEGORIES', value: m365Categories }
+        // Package deployment: managed identity blob access — no SAS token, no expiry
+        { name: 'WEBSITE_RUN_FROM_PACKAGE', value: 'https://${storageAccount.name}.blob.${environment().suffixes.storage}/scm-releases/scm-latest-${functionAppName}.zip' }
       ]
     }
   }
@@ -153,13 +190,16 @@ resource scmBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@20
 
 var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
 // Storage roles for managed identity AzureWebJobsStorage (host runtime needs blob + queue + table)
-var storageBlobDataOwnerRoleId = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
+// Storage Blob Data Contributor is sufficient for timer-triggered functions;
+// Owner is only required for blob-triggered functions (lease management).
+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var storageQueueDataContributorRoleId = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
 var storageTableDataContributorRoleId = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 
 // Network Contributor on the resource group (for route table management)
 resource networkContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(resourceGroup().id, functionApp.id, networkContributorRoleId)
+  scope: resourceGroup()
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', networkContributorRoleId)
     principalId: functionApp.identity.principalId
@@ -167,12 +207,12 @@ resource networkContributorAssignment 'Microsoft.Authorization/roleAssignments@2
   }
 }
 
-// Storage Blob Data Owner (blob state management + AzureWebJobsStorage host runtime)
+// Storage Blob Data Contributor (blob state management + AzureWebJobsStorage host runtime)
 resource storageBlobRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccount.id, functionApp.id, storageBlobDataOwnerRoleId)
+  name: guid(storageAccount.id, functionApp.id, storageBlobDataContributorRoleId)
   scope: storageAccount
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataOwnerRoleId)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
     principalId: functionApp.identity.principalId
     principalType: 'ServicePrincipal'
   }
