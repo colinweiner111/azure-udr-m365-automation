@@ -160,6 +160,9 @@ Each run writes a JSON blob to the `run-logs` container in your storage account,
 ## References
 
 - [Microsoft 365 IP Web Service](https://learn.microsoft.com/en-us/microsoft-365/enterprise/microsoft-365-ip-web-service)
+- [M365 Endpoint Categories (Optimize / Allow / Default)](https://learn.microsoft.com/en-us/microsoft-365/enterprise/microsoft-365-network-connectivity-principles#identify-microsoft-365-network-traffic)
+- [M365 Endpoints API — worldwide endpoints](https://endpoints.office.com/endpoints/worldwide?clientrequestid=b10c5ed1-bad1-445f-b386-b919946339a7) *(live JSON the function pulls)*
+- [M365 Endpoints API — current version](https://endpoints.office.com/version/worldwide?clientrequestid=b10c5ed1-bad1-445f-b386-b919946339a7) *(version number used in run logs)*
 - [Azure Route Tables](https://learn.microsoft.com/en-us/azure/virtual-network/manage-route-table)
 - [Azure Functions Python Developer Guide](https://learn.microsoft.com/en-us/azure/azure-functions/functions-reference-python)
 
