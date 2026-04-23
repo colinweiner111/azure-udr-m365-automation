@@ -21,13 +21,6 @@ logger = logging.getLogger(__name__)
 app = func.FunctionApp()
 
 
-@app.route(route="run", auth_level=func.AuthLevel.FUNCTION)
-def run_http(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP trigger to manually invoke the route sync — for portal/demo use."""
-    _sync_routes()
-    return func.HttpResponse("Route sync complete.", status_code=200)
-
-
 @app.schedule(schedule="0 0 0 * * *", arg_name="mytimer", run_on_startup=False,
               use_monitor=True)
 def update_m365_routes(mytimer: func.TimerRequest) -> None:
@@ -36,7 +29,7 @@ def update_m365_routes(mytimer: func.TimerRequest) -> None:
 
 
 def _sync_routes() -> None:
-    """Core sync logic shared by both the timer and HTTP triggers."""
+    """Core sync logic for the timer trigger."""
 
     # Parse configuration
     config = parse_config()
