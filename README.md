@@ -10,8 +10,6 @@ Keeps Azure Route Tables synchronized with Microsoft 365 IP ranges so M365 traff
 
 ## Prerequisites
 
-- Azure CLI (`az`) and Azure Functions Core Tools (`func`) installed
-- Python 3.11+
 - Azure subscription with permission to create resources and assign RBAC roles
 - One or more existing Route Tables in the target resource group (Bicep provisions the first one; additional tables must be pre-created)
 
@@ -19,17 +17,23 @@ Keeps Azure Route Tables synchronized with Microsoft 365 IP ranges so M365 traff
 
 ## Deploy
 
-### 1. Log in and set your subscription
+> **Everything below can be run entirely from [Azure Cloud Shell](https://shell.azure.com)** — no local tooling required. Cloud Shell has the Azure CLI, `pip`, and `git` pre-installed and you're already authenticated.
+
+### 1. Clone the repo and set your subscription
 
 ```bash
-az login
+git clone https://github.com/colinweiner111/azure-udr-m365-automation.git
+cd azure-udr-m365-automation
 az account set --subscription <subscription-id>
-az account show --query "{name:name, id:id}" -o table
 ```
 
 ### 2. Configure parameters
 
-Edit `infra/main.parameters.json`:
+Open the parameters file in the Cloud Shell editor:
+
+```bash
+code infra/main.parameters.json
+```
 
 | Parameter | Description | Required |
 |-----------|-------------|----------|
@@ -51,17 +55,18 @@ Edit `infra/main.parameters.json`:
 az group create --name <resource-group> --location <location>
 
 az deployment group create \
-  --subscription <subscription-id> \
   --resource-group <resource-group> \
   --template-file infra/main.bicep \
   --parameters infra/main.parameters.json
 ```
 
+> Takes under 20 minutes. Azure Cloud Shell disconnects after 20 minutes of inactivity — the deployment completes well within that window.
+
 Bicep creates: Storage Account, Blob containers, Consumption-plan Linux Function App (Python 3.11) with System-Assigned Managed Identity, Application Insights, and all required RBAC role assignments (Network Contributor on the RG, Storage Blob/Queue/Table Data Contributor on the storage account).
 
 ### 4. Deploy function code
 
-Package and upload the function code. The `WEBSITE_RUN_FROM_PACKAGE` app setting points to a blob in the `scm-releases` container — upload your zip there:
+Still in the same Cloud Shell session:
 
 ```bash
 # Build zip (Linux-compiled packages required for Azure Linux consumption plan)
@@ -82,13 +87,13 @@ az storage blob upload \
   --overwrite
 ```
 
+> Takes under a minute.
+
 ### 5. Verify
 
 ```bash
-# Check function app is running
 az functionapp show --resource-group <resource-group> --name <function-app-name> --query state
 
-# Stream live logs
 az webapp log tail --resource-group <resource-group> --name <function-app-name>
 ```
 
@@ -98,7 +103,7 @@ The function runs automatically at midnight UTC daily (`0 0 0 * * *`).
 
 ## Trigger manually
 
-**From the CLI** (using the HTTP trigger):
+**From the CLI:**
 
 ```bash
 FUNCTION_KEY=$(az functionapp keys list \
@@ -117,7 +122,6 @@ curl -X POST "https://<function-app-name>.azurewebsites.net/api/run?code=$FUNCTI
 
 Each run writes a JSON blob to the `run-logs` container in your storage account, organized by date (`YYYY/MM/DD/HH-MM-SS.json`). Browse them in Azure Storage Explorer or the portal.
 
-Example log entry:
 ```json
 {
   "timestamp": "2026-04-23T01:03:20Z",
@@ -150,15 +154,6 @@ Example log entry:
 
 **Azure Policy wiping route tables**
 - Policies with a `Modify` effect can overwrite route table properties. Exempt the resource group from those policies. The function will restore any removed routes on the next run (daily or manual trigger).
-
----
-
-## Future enhancements
-
-- **/changes endpoint**: Use Microsoft's delta endpoint instead of full sync for more efficient API calls
-- **Azure Virtual Network Manager**: Centralized multi-region route management
-- **IPv6 support**: M365 IPv6 endpoints when more widely adopted
-- **CIDR aggregation**: Reduce route count via RFC 4632 summarization (requires external tooling today)
 
 ---
 
