@@ -29,7 +29,7 @@ def run_http(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.schedule(schedule="0 0 0 * * *", arg_name="mytimer", run_on_startup=False,
-              use_monitor=False)
+              use_monitor=True)
 def update_m365_routes(mytimer: func.TimerRequest) -> None:
     """Timer-triggered daily route sync."""
     _sync_routes()
