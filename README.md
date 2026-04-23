@@ -8,6 +8,24 @@ Keeps Azure Route Tables synchronized with Microsoft 365 IP ranges so M365 traff
 
 ---
 
+## Why these routes?
+
+Microsoft classifies M365 network traffic into [three categories](https://learn.microsoft.com/en-us/microsoft-365/enterprise/microsoft-365-network-connectivity-principles#new-office-365-endpoint-categories). This function defaults to `Optimize` + `Allow`:
+
+| Category | What it covers | Route it direct? |
+|----------|---------------|-----------------|
+| **Optimize** | Teams real-time media, Exchange Online, SharePoint Online — the highest-volume, most latency-sensitive M365 traffic. Microsoft [explicitly requires](https://learn.microsoft.com/en-us/microsoft-365/enterprise/microsoft-365-network-connectivity-principles#avoid-network-hairpins-for-microsoft-365) these IPs bypass proxies and inspection devices entirely. | **Yes** |
+| **Allow** | Additional Exchange Online, SharePoint Online, and OneDrive endpoints. Not as latency-sensitive as Optimize, but Microsoft [recommends](https://learn.microsoft.com/en-us/microsoft-365/enterprise/microsoft-365-network-connectivity-principles#optimizing-connectivity-to-microsoft-365-services) avoiding proxy inspection for these too. | **Yes** |
+| **Default** | General Microsoft CDN, telemetry, and cloud traffic that goes well beyond core M365 workloads. Can tolerate your security appliance and should stay on the normal path. | No |
+
+The full list of IPs per category is published at [Microsoft 365 URLs and IP address ranges](https://learn.microsoft.com/en-us/microsoft-365/enterprise/urls-and-ip-address-ranges?view=o365-worldwide).
+
+**Why not `Default`?** The `Default` set covers a very broad range of Microsoft IPs — routing all of it directly would effectively gut your security appliance's visibility into a large chunk of outbound traffic. `Optimize` + `Allow` is the surgical option: ~34 routes as of April 2026, covering exactly the M365 workloads Microsoft says need direct paths, while everything else still flows through your stack.
+
+**Why UDRs at all?** In hub-and-spoke networks with a [forced tunnel](https://learn.microsoft.com/en-us/azure/vpn-gateway/vpn-gateway-forced-tunneling-rm) (`0.0.0.0/0 → NVA or VPN gateway`), M365 traffic hairpins through your security appliance before reaching the internet. Microsoft [calls this out](https://learn.microsoft.com/en-us/microsoft-365/enterprise/microsoft-365-network-connectivity-principles#avoid-network-hairpins-for-microsoft-365) as a primary cause of poor Teams call quality and slow SharePoint performance. UDRs with `nextHopType: Internet` on the M365 CIDRs punch precise holes in the forced tunnel — M365 breaks out locally, everything else still goes through the appliance.
+
+---
+
 ## Prerequisites
 
 - Azure subscription with permission to create resources and assign RBAC roles
