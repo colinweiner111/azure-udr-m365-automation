@@ -91,9 +91,21 @@ def _sync_routes() -> None:
             logger.warning(f"Detected {len(drifted)} drifted route(s) missing from route table: {drifted}")
             to_add = sorted(set(to_add) | set(drifted))
 
-        # If no changes and no drift, exit early
+        # If no changes and no drift, log and exit early
         if not to_add and not to_remove:
             logger.info("No changes detected, exiting")
+            run_logger.write(
+                m365_version=current_version,
+                total_routes=len(new_cidrs),
+                added=[],
+                removed=[],
+                drift_restored=[],
+                add_succeeded=0,
+                add_failed=0,
+                remove_succeeded=0,
+                remove_failed=0,
+                result="no_change"
+            )
             return
 
         logger.info(f"Changes detected: +{len(to_add)} -{len(to_remove)} (includes {len(drifted)} drifted)")
