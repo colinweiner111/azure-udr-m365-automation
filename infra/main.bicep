@@ -50,9 +50,6 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 }
 
 // Storage Account
-// Note: allowSharedKeyAccess is required for Linux Consumption plan. The WEBSITE_CONTENTAZUREFILECONNECTIONSTRING
-// app setting mounts an Azure Files share via SMB for the function runtime filesystem, and Azure Files SMB
-// does not support managed identity auth. This is a platform limitation; see https://aka.ms/functions-storage-managed-identity.
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName
   location: location
@@ -64,7 +61,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
     supportsHttpsTrafficOnly: true
-    allowSharedKeyAccess: true // Required: Azure Files SMB (used by consumption plan) does not support managed identity
+    allowSharedKeyAccess: false // Flex Consumption uses managed identity for all storage access; no Azure Files mount required
   }
 }
 
@@ -97,36 +94,21 @@ resource packageContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
   }
 }
 
-// Consumption plan (Linux)
+// Flex Consumption plan (Linux)
 resource hostingPlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: '${functionAppName}-plan'
   location: location
   kind: 'functionapp'
   sku: {
-    name: 'Y1'
-    tier: 'Dynamic'
+    name: 'FC1'
+    tier: 'FlexConsumption'
   }
   properties: {
-    reserved: true // required for Linux
+    reserved: true
   }
 }
 
-// Account key connection string — scoped only to WEBSITE_CONTENTAZUREFILECONNECTIONSTRING (Azure Files mount).
-// AzureWebJobsStorage uses managed identity instead (see RBAC assignments below).
-//
-// Why not a Key Vault reference?
-// WEBSITE_CONTENTAZUREFILECONNECTIONSTRING is resolved by the Azure Files infrastructure
-// layer at host boot, before the Functions runtime initializes. Key Vault reference
-// resolution happens inside the runtime — so for this specific setting it is always
-// too late. This is a known platform limitation with no current workaround on
-// Consumption plan Linux. It is also why allowSharedKeyAccess: true is required on
-// the storage account above. All other secrets in this deployment use managed identity
-// and do not require Key Vault. See https://aka.ms/functions-storage-managed-identity
-//
-// Security note: listKeys() is evaluated by ARM at deploy time. The resulting connection
-// string is persisted in ARM deployment history. Scope */read access on this resource
-// group tightly in production, or use deployment stacks to control history retention.
-var storageFileConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storageAccount.listKeys().keys[0].value}'
+
 
 // Function App with System-Assigned Managed Identity
 resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
@@ -139,12 +121,32 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: hostingPlan.id
     httpsOnly: true
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'blobContainer'
+          value: 'https://${storageAccount.name}.blob.${environment().suffixes.storage}/scm-releases'
+          authentication: {
+            type: 'SystemAssignedIdentity'
+          }
+        }
+      }
+      scaleAndConcurrency: {
+        instanceMemoryMB: 2048
+        maximumInstanceCount: 40
+      }
+      runtime: {
+        name: 'python'
+        version: '3.11'
+      }
+    }
     siteConfig: {
-      linuxFxVersion: 'Python|3.11'
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
-      // Enable SCM basic auth so Kudu zip deploy works during CI/CD
-      scmIpSecurityRestrictionsUseMain: false
+      cors: {
+        allowedOrigins: ['https://portal.azure.com']
+        supportCredentials: false
+      }
       appSettings: [
         // AzureWebJobsStorage uses managed identity (blob/queue/table — no account key)
         { name: 'AzureWebJobsStorage__accountName', value: storageAccount.name }
@@ -152,14 +154,8 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'AzureWebJobsStorage__queueServiceUri', value: 'https://${storageAccount.name}.queue.${environment().suffixes.storage}' }
         { name: 'AzureWebJobsStorage__tableServiceUri', value: 'https://${storageAccount.name}.table.${environment().suffixes.storage}' }
         { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
-        // Azure Files content share requires account key (KV references unsupported for this setting — see comment above)
-        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING', value: storageFileConnectionString }
-        { name: 'WEBSITE_CONTENTSHARE', value: toLower(functionAppName) }
-        { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
-        { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'python' }
-        // Oryx builds packages on deployment (pip install from requirements.txt)
-        { name: 'SCM_DO_BUILD_DURING_DEPLOYMENT', value: 'true' }
-        { name: 'ENABLE_ORYX_BUILD', value: 'true' }
+        // FUNCTIONS_EXTENSION_VERSION and FUNCTIONS_WORKER_RUNTIME are not valid app settings on Flex Consumption
+        // — runtime and version are configured via functionAppConfig.runtime above
         { name: 'APPINSIGHTS_INSTRUMENTATIONKEY', value: appInsights.properties.InstrumentationKey }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
         { name: 'SUBSCRIPTION_ID', value: subscriptionId }
@@ -172,19 +168,8 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         // Optional: set a deployment-specific UUID to avoid rate-limit collisions on the M365 endpoints API
         { name: 'M365_CLIENT_REQUEST_ID', value: '' }
         { name: 'M365_CATEGORIES', value: m365Categories }
-        // Package deployment: managed identity blob access — no SAS token, no expiry
-        { name: 'WEBSITE_RUN_FROM_PACKAGE', value: 'https://${storageAccount.name}.blob.${environment().suffixes.storage}/scm-releases/scm-latest-${functionAppName}.zip' }
       ]
     }
-  }
-}
-
-// Allow SCM (Kudu) basic auth for zip deploy during CI/CD
-resource scmBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2023-12-01' = {
-  parent: functionApp
-  name: 'scm'
-  properties: {
-    allow: true
   }
 }
 

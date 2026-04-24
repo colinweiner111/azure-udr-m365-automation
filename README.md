@@ -80,29 +80,22 @@ az deployment group create \
 
 > Takes under 20 minutes. Azure Cloud Shell disconnects after 20 minutes of inactivity — the deployment completes well within that window.
 
-Bicep creates: Storage Account, Blob containers, Consumption-plan Linux Function App (Python 3.11) with System-Assigned Managed Identity, Application Insights, and all required RBAC role assignments (Network Contributor on the RG, Storage Blob/Queue/Table Data Contributor on the storage account).
+Bicep creates: Storage Account, Blob containers, Flex Consumption Function App (Python 3.11, FC1) with System-Assigned Managed Identity, Application Insights, and all required RBAC role assignments (Network Contributor on the RG, Storage Blob/Queue/Table Data Contributor on the storage account).
 
 ### 4. Deploy function code
 
 Still in the same Cloud Shell session:
 
 ```bash
-# Build zip (Linux-compiled packages required for Azure Linux consumption plan)
+# Build zip (Linux-compiled packages required)
 pip install --target .python_packages/lib/site-packages -r requirements.txt --platform manylinux2014_x86_64 --only-binary=:all:
 zip -r function.zip . -x "*.git*" "local.settings.json" "__pycache__/*" "*.pyc" "tests.py" "infra/*"
 
-# Upload to storage
-CONN=$(az storage account show-connection-string \
+# Deploy zip to Flex Consumption function app
+az functionapp deployment source config-zip \
   --resource-group <resource-group> \
-  --name <storage-account-name> \
-  --query connectionString -o tsv)
-
-az storage blob upload \
-  --connection-string "$CONN" \
-  --container-name scm-releases \
-  --name scm-latest-<function-app-name>.zip \
-  --file function.zip \
-  --overwrite
+  --name <function-app-name> \
+  --src function.zip
 ```
 
 > Takes under a minute.
@@ -124,15 +117,11 @@ The function runs automatically at midnight UTC daily (`0 0 0 * * *`).
 **From the CLI:**
 
 ```bash
-FUNCTION_KEY=$(az functionapp keys list \
-  --resource-group <resource-group> \
-  --name <function-app-name> \
-  --query "functionKeys.default" -o tsv)
-
-curl -X POST "https://<function-app-name>.azurewebsites.net/api/run?code=$FUNCTION_KEY"
+az rest --method post \
+  --uri "https://management.azure.com/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.Web/sites/<function-app-name>/hostruntime/admin/functions/update_m365_routes/trigger?api-version=2024-04-01"
 ```
 
-**From the Azure Portal:** Open the Function App → Functions → `run_http` → Code + Test → Test/Run.
+**From the Azure Portal:** Open the Function App → Functions → `update_m365_routes` → Code + Test → Test/Run.
 
 ---
 
@@ -164,8 +153,8 @@ Each run writes a JSON blob to the `run-logs` container in your storage account,
 - The function identity needs Network Contributor on the RG and Storage Blob Data Contributor on the storage account (Bicep assigns these automatically).
 
 **Function shows ServiceUnavailable after deploy**
-- The zip hasn't been uploaded yet, or `WEBSITE_RUN_FROM_PACKAGE` points to a blob that doesn't exist.
-- Upload the zip to `scm-releases` as shown in Step 4.
+- The zip hasn't been deployed yet.
+- Run `az functionapp deployment source config-zip` as shown in Step 4.
 
 **Routes were deleted and not restored**
 - Drift detection runs on every execution. Trigger manually (see above) to restore immediately rather than waiting for the next daily run.
