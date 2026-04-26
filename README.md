@@ -162,6 +162,9 @@ Each run writes a JSON blob to the `run-logs` container in your storage account,
 **Azure Policy wiping route tables**
 - Policies with a `Modify` effect can overwrite route table properties. Exempt the resource group from those policies. The function will restore any removed routes on the next run (daily or manual trigger).
 
+**Will the function remove my custom/non-M365 routes?**
+- No. The function only manages routes whose address prefixes appear in the M365 endpoint API. Any route you add manually (e.g. `0.0.0.0/0` pointing to a firewall) is invisible to the function and will never be modified or removed. The one exception: if a CIDR you added manually happens to match an M365-published prefix that Microsoft later drops, the function would remove it as part of normal M365 cleanup.
+
 ---
 
 ## References
