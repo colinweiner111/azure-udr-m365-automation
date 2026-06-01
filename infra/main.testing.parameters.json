@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "subscriptionId": {
+      "value": "f4c81bdc-9009-4c72-89ae-f96947f57d27"
+    },
+    "location": {
+      "value": "centralus"
+    },
+    "functionAppName": {
+      "value": "udr-m365-automation-test"
+    },
+    "storageAccountName": {
+      "value": "udrm365teststorage"
+    },
+    "containerName": {
+      "value": "m365-routes"
+    },
+    "routeTableNames": {
+      "value": "rt-m365-integration-test,rg-udr-m365-county-dept01-testing/rt-m365-county-dept01-test,rg-udr-m365-county-dept02-testing/rt-m365-county-dept02-test,rg-udr-m365-county-dept03-testing/rt-m365-county-dept03-test,rg-udr-m365-county-dept04-testing/rt-m365-county-dept04-test,rg-udr-m365-county-dept05-testing/rt-m365-county-dept05-test"
+    },
+    "nextHopType": {
+      "value": "Internet"
+    },
+    "nextHopIp": {
+      "value": ""
+    },
+    "m365Categories": {
+      "value": "Optimize,Allow"
+    }
+  }
+}

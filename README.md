@@ -49,7 +49,8 @@ The full list of IPs per category is published at [Microsoft 365 URLs and IP add
 
 - Azure subscription with permission to create resources and assign RBAC roles
 - Azure CLI installed, or use [Azure Cloud Shell](https://shell.azure.com) (no local install required)
-- One or more existing Route Tables in the target resource group (Bicep provisions the first one; additional tables must be pre-created)
+- The deployment resource group must exist before running Bicep (Bicep provisions the first route table in that RG automatically)
+- Route tables in **other** resource groups (referenced as `resourcegroup/tablename` in `routeTableNames`) must already exist — Bicep does not create them and does not touch resources in other RGs
 
 ### Azure RBAC Requirements
 
@@ -68,14 +69,33 @@ Two sets of permissions are required: one for **deploying the solution** (your u
 
 The Bicep template automatically assigns these roles to the Function App's **system-assigned managed identity**. No manual steps are needed if you deploy with sufficient permissions above.
 
-If you manage route tables in additional resource groups (using `resourcegroup/tablename` entries), manually assign **Network Contributor** on each additional route table resource group. The template can only auto-assign roles in the deployment resource group.
+If you manage route tables in additional resource groups (using `resourcegroup/tablename` entries in `routeTableNames`), you must manually assign **Network Contributor** on each of those resource groups after running Bicep. The Bicep template can only assign roles within the deployment resource group.
+
+> **Why:** The Function App uses a system-assigned managed identity. This identity is created inside the function app's resource group and has no automatic access to other resource groups. It is also tied to the function app's lifecycle — if you delete and recreate the function app (e.g. to fix a broken deployment), a new identity with a new principal ID is created and these cross-RG role assignments must be re-applied.
+
+```bash
+# Get the managed identity principal ID after Bicep deployment
+PRINCIPAL_ID=$(az functionapp show \
+  --resource-group <deployment-resource-group> \
+  --name <function-app-name> \
+  --query identity.principalId -o tsv)
+
+# Assign Network Contributor on each additional route table resource group
+for RG in rg-dept01 rg-dept02 rg-dept03; do
+  az role assignment create \
+    --assignee-object-id $PRINCIPAL_ID \
+    --assignee-principal-type ServicePrincipal \
+    --role "Network Contributor" \
+    --scope "/subscriptions/<subscription-id>/resourceGroups/$RG"
+done
+```
 
 | Role | Scope | Purpose |
 |------|-------|---------|
 | **Network Contributor** | Resource Group | Read and update Route Tables (add/remove UDR entries) |
-| **Storage Blob Data Contributor** | Storage Account | Read/write route-state blobs and run-log blobs |
-| **Storage Queue Data Contributor** | Storage Account | Required by the Azure Functions Flex Consumption host |
-| **Storage Table Data Contributor** | Storage Account | Required by the Azure Functions Flex Consumption host |
+| **Storage Blob Data Contributor** | Storage Account | Read/write route-state blobs, run-log blobs, and the deployment package |
+
+> **Note:** Storage Queue Data Contributor and Storage Table Data Contributor are **not** assigned. Per Microsoft's Flex Consumption documentation, those roles are only required for blob-triggered or event hub-triggered functions — not timer-triggered functions.
 
 To verify role assignments after deployment:
 
@@ -115,6 +135,22 @@ Open the parameters file in the Cloud Shell editor:
 code infra/main.parameters.json
 ```
 
+For separate environments, use dedicated parameter files:
+
+```bash
+code infra/main.testing.parameters.json
+code infra/main.prod.parameters.json
+```
+
+Use different values per environment for at least:
+
+- `functionAppName`
+- `storageAccountName`
+- `routeTableNames`
+- deployment resource group
+
+This keeps test and production state/log data isolated.
+
 | Parameter | Description | Required |
 |-----------|-------------|----------|
 | `subscriptionId` | Azure subscription ID | Yes |
@@ -134,15 +170,40 @@ code infra/main.parameters.json
 ```bash
 az group create --name <resource-group> --location <location>
 
+# Pick one parameter file per deployment
+# infra/main.testing.parameters.json or infra/main.prod.parameters.json
 az deployment group create \
   --resource-group <resource-group> \
   --template-file infra/main.bicep \
-  --parameters infra/main.parameters.json
+  --parameters <parameters-file>
 ```
 
 > Takes under 20 minutes. Azure Cloud Shell disconnects after 20 minutes of inactivity — the deployment completes well within that window.
 
 Bicep creates: Storage Account, Blob containers, Flex Consumption Function App (Python 3.11, FC1) with System-Assigned Managed Identity, Application Insights, and all required RBAC role assignments (Network Contributor on the RG, Storage Blob/Queue/Table Data Contributor on the storage account).
+
+### 3a. Assign Network Contributor on additional resource groups
+
+Skip this step if all your route tables are in the deployment resource group.
+
+If `routeTableNames` includes tables in other resource groups (`resourcegroup/tablename` format), assign Network Contributor on each of those RGs now. The managed identity does not have access to them automatically.
+
+```bash
+PRINCIPAL_ID=$(az functionapp show \
+  --resource-group <resource-group> \
+  --name <function-app-name> \
+  --query identity.principalId -o tsv)
+
+for RG in rg-dept01 rg-dept02 rg-dept03; do
+  az role assignment create \
+    --assignee-object-id $PRINCIPAL_ID \
+    --assignee-principal-type ServicePrincipal \
+    --role "Network Contributor" \
+    --scope "/subscriptions/<subscription-id>/resourceGroups/$RG"
+done
+```
+
+> **Note:** The route tables in those RGs must already exist — this step only grants the managed identity permission to manage routes on them. The function does not create route tables.
 
 ### 4. Deploy function code
 
@@ -170,7 +231,7 @@ az functionapp show --resource-group <resource-group> --name <function-app-name>
 az webapp log tail --resource-group <resource-group> --name <function-app-name>
 ```
 
-The function runs automatically at midnight UTC daily (`0 0 0 * * *`).
+The function runs automatically at 1:00 PM UTC daily (`0 0 13 * * *`), which is 6:00 AM PDT.
 
 ---
 
@@ -236,7 +297,7 @@ Quick checks after each run:
 - The function identity needs Network Contributor on the RG and Storage Blob Data Contributor on the storage account (Bicep assigns these automatically).
 
 **Managed identity deleted or role assignments missing**
-- If the Function App is re-created or its managed identity is deleted (e.g. by an Azure Policy cleanup job), the role assignments are orphaned and must be re-applied. Re-run the Bicep deployment — it will create a new identity and re-assign all roles. Orphaned assignments show up as `Unknown` principals in IAM and can be safely deleted.
+- If the Function App is re-created or its managed identity is deleted (e.g. by an Azure Policy cleanup job), the role assignments are orphaned and must be re-applied. Re-run the Bicep deployment — it will create a new identity and re-assign roles within the deployment resource group. Then re-run the cross-RG assignments from Step 3a for any additional resource groups. Orphaned assignments show up as `Unknown` principals in IAM and can be safely deleted.
 
 **Function shows ServiceUnavailable after deploy**
 - The zip hasn't been deployed yet.

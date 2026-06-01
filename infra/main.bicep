@@ -152,8 +152,6 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         // AzureWebJobsStorage uses managed identity (blob/queue/table — no account key)
         { name: 'AzureWebJobsStorage__accountName', value: storageAccount.name }
         { name: 'AzureWebJobsStorage__blobServiceUri', value: 'https://${storageAccount.name}.blob.${environment().suffixes.storage}' }
-        { name: 'AzureWebJobsStorage__queueServiceUri', value: 'https://${storageAccount.name}.queue.${environment().suffixes.storage}' }
-        { name: 'AzureWebJobsStorage__tableServiceUri', value: 'https://${storageAccount.name}.table.${environment().suffixes.storage}' }
         { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
         // FUNCTIONS_EXTENSION_VERSION and FUNCTIONS_WORKER_RUNTIME are not valid app settings on Flex Consumption
         // — runtime and version are configured via functionAppConfig.runtime above
@@ -174,12 +172,9 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
 }
 
 var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
-// Storage roles for managed identity AzureWebJobsStorage (host runtime needs blob + queue + table)
-// Storage Blob Data Contributor is sufficient for timer-triggered functions;
-// Owner is only required for blob-triggered functions (lease management).
+// Storage Blob Data Contributor is the only storage role required for Flex Consumption with a
+// timer trigger. Queue and Table Data Contributor are only needed for blob/event hub triggers.
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-var storageQueueDataContributorRoleId = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
-var storageTableDataContributorRoleId = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 
 // Network Contributor on the resource group (for route table management)
 resource networkContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -192,34 +187,12 @@ resource networkContributorAssignment 'Microsoft.Authorization/roleAssignments@2
   }
 }
 
-// Storage Blob Data Contributor (blob state management + AzureWebJobsStorage host runtime)
+// Storage Blob Data Contributor — deployment package (scm-releases), route-state blobs, run-log blobs
 resource storageBlobRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(storageAccount.id, functionApp.id, storageBlobDataContributorRoleId)
   scope: storageAccount
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
-    principalId: functionApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// Storage Queue Data Contributor (required by Functions host runtime for triggers and locks)
-resource storageQueueRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccount.id, functionApp.id, storageQueueDataContributorRoleId)
-  scope: storageAccount
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageQueueDataContributorRoleId)
-    principalId: functionApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// Storage Table Data Contributor (required by Functions host runtime for state)
-resource storageTableRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccount.id, functionApp.id, storageTableDataContributorRoleId)
-  scope: storageAccount
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableDataContributorRoleId)
     principalId: functionApp.identity.principalId
     principalType: 'ServicePrincipal'
   }
