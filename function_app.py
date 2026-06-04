@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 app = func.FunctionApp()
 
 
-@app.schedule(schedule="0 0 13 * * *", arg_name="mytimer", run_on_startup=False,
+@app.schedule(schedule="%M365_ROUTE_SYNC_SCHEDULE%", arg_name="mytimer", run_on_startup=False,
               use_monitor=True)
 def update_m365_routes(mytimer: func.TimerRequest) -> None:
     """Timer-triggered daily route sync."""

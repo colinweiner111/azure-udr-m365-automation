@@ -179,6 +179,7 @@ For customer deployments, copy `infra/main.customer.parameters.template.json` to
 | `nextHopIp` | NVA private IP — required only when `nextHopType` is `VirtualAppliance` | Conditional |
 | `containerName` | Blob container for route state | Default: `m365-routes` |
 | `m365Categories` | M365 categories to include: `Optimize`, `Allow`, `Default` | Default: `Optimize,Allow` |
+| `m365RouteSyncSchedule` | Timer schedule in UTC (NCRONTAB, 6 fields: `sec min hour day month day-of-week`) | Default: `0 0 0 * * *` |
 
 > **Route table limit:** Azure caps each route table at ~400 routes. `Optimize,Allow` produces ~34 routes as of April 2026 — well within limits.
 
@@ -254,7 +255,9 @@ az webapp log tail --resource-group <resource-group> --name <function-app-name>
 
 For a customer handoff, run one manual trigger after deployment and inspect the newest blob in the `run-logs` container. Do not treat the deployment as complete until every table in the run-log shows an empty `errors` array.
 
-The function runs automatically at 1:00 PM UTC daily (`0 0 13 * * *`), which is 6:00 AM PDT.
+The function schedule is controlled by the app setting `M365_ROUTE_SYNC_SCHEDULE`. The default deployment value is midnight UTC daily (`0 0 0 * * *`).
+
+To change run time without redeploying code: Function App -> Settings -> Environment variables -> update `M365_ROUTE_SYNC_SCHEDULE` -> Save -> Restart.
 
 ---
 
