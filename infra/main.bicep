@@ -29,6 +29,9 @@ param containerName string = 'm365-routes'
 @description('Comma-separated M365 endpoint categories to include in route tables (Optimize, Allow, Default).')
 param m365Categories string = 'Optimize,Allow'
 
+@description('NCRONTAB schedule for the timer trigger in UTC (six fields: sec min hour day month day-of-week).')
+param m365RouteSyncSchedule string = '0 0 0 * * *'
+
 // Route Table for M365 UDRs
 resource routeTable 'Microsoft.Network/routeTables@2023-09-01' = {
   name: split(routeTableNames, ',')[0]
@@ -164,6 +167,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'NEXT_HOP_IP', value: nextHopIp }
         { name: 'M365_CLIENT_REQUEST_ID', value: '' }
         { name: 'M365_CATEGORIES', value: m365Categories }
+        { name: 'M365_ROUTE_SYNC_SCHEDULE', value: m365RouteSyncSchedule }
       ]
     }
   }
