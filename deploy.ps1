@@ -17,6 +17,10 @@
 .PARAMETER ResourceGroup
     The deployment resource group. Example: rg-udr-m365-automation-testing
 
+.PARAMETER SubscriptionId
+    The target Azure subscription ID for deployment. Must match the subscriptionId
+    value in the parameters file.
+
 .PARAMETER ZipPath
     Path to the built function zip. Defaults to 'function.zip' in the current directory.
     Build the zip first with:
@@ -29,10 +33,10 @@
     Skip the zip deployment step. Useful when re-running Bicep only.
 
 .EXAMPLE
-    .\deploy.ps1 -ParametersFile infra/main.testing.parameters.json -ResourceGroup rg-udr-m365-automation-testing
+    .\deploy.ps1 -ParametersFile infra/main.testing.parameters.json -ResourceGroup rg-udr-m365-automation-testing -SubscriptionId <subscription-id>
 
 .EXAMPLE
-    .\deploy.ps1 -ParametersFile infra/main.prod.parameters.json -ResourceGroup rg-udr-m365-automation-prod -ZipPath C:\builds\function.zip
+    .\deploy.ps1 -ParametersFile infra/main.prod.parameters.json -ResourceGroup rg-udr-m365-automation-prod -SubscriptionId <subscription-id> -ZipPath C:\builds\function.zip
 #>
 param(
     [Parameter(Mandatory)]
@@ -40,6 +44,9 @@ param(
 
     [Parameter(Mandatory)]
     [string]$ResourceGroup,
+
+    [Parameter(Mandatory)]
+    [string]$SubscriptionId,
 
     [string]$ZipPath = "function.zip",
 
@@ -62,16 +69,41 @@ Write-Step "Reading parameters from $ParametersFile"
 
 if (-not (Test-Path $ParametersFile)) { throw "Parameters file not found: $ParametersFile" }
 
-$params         = Get-Content $ParametersFile | ConvertFrom-Json
-$subscriptionId = $params.parameters.subscriptionId.value
+$params                  = Get-Content $ParametersFile | ConvertFrom-Json
+$parameterSubscriptionId = $params.parameters.subscriptionId.value
 $functionApp    = $params.parameters.functionAppName.value
 $rtNames        = $params.parameters.routeTableNames.value
 
-if ($subscriptionId -match "^<") { throw "subscriptionId is still a placeholder in $ParametersFile" }
+if ($parameterSubscriptionId -match "^<") { throw "subscriptionId is still a placeholder in $ParametersFile" }
+
+if ($SubscriptionId -ne $parameterSubscriptionId) {
+    throw "SubscriptionId argument '$SubscriptionId' does not match parameters file subscriptionId '$parameterSubscriptionId'"
+}
 
 Write-Ok "Function app : $functionApp"
-Write-Ok "Subscription : $subscriptionId"
+Write-Ok "Subscription : $SubscriptionId"
 Write-Ok "Route tables : $rtNames"
+
+# ---------------------------------------------------------------------------
+# 1a. Enforce Azure subscription context from parameters file
+# ---------------------------------------------------------------------------
+Write-Step "Setting Azure subscription context"
+
+az account set --subscription $SubscriptionId 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to set Azure subscription context to $SubscriptionId"
+}
+
+$activeSubscription = az account show --query "id" -o tsv 2>&1
+if ($LASTEXITCODE -ne 0 -or -not $activeSubscription) {
+    throw "Failed to read active Azure subscription after az account set"
+}
+
+if ($activeSubscription -ne $SubscriptionId) {
+    throw "Active Azure subscription '$activeSubscription' does not match requested subscription '$SubscriptionId'"
+}
+
+Write-Ok "Active subscription confirmed: $activeSubscription"
 
 # ---------------------------------------------------------------------------
 # 2. Create route tables (idempotent)
@@ -139,7 +171,7 @@ foreach ($entry in $entries) {
     if ($entry -match "^([^/]+)/([^/]+)$") {
         $rtRg = $matches[1]
         if ($rtRg -notin $assignedRgs) {
-            $scope = "/subscriptions/$subscriptionId/resourceGroups/$rtRg"
+            $scope = "/subscriptions/$SubscriptionId/resourceGroups/$rtRg"
             $existing = az role assignment list --assignee $principalId --role "Network Contributor" --scope $scope --query "[].id" -o tsv 2>&1
             if ($existing) {
                 Write-Ok "Network Contributor already assigned on $rtRg (skipped)"
@@ -187,4 +219,4 @@ if ($SkipZipDeploy) {
 Write-Host "`nDeployment complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "Trigger manually:"
-Write-Host "  az rest --method post --uri `"https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$functionApp/hostruntime/admin/functions/update_m365_routes/trigger?api-version=2024-04-01`""
+Write-Host "  az rest --method post --uri `"https://management.azure.com/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.Web/sites/$functionApp/hostruntime/admin/functions/update_m365_routes/trigger?api-version=2024-04-01`""

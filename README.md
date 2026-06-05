@@ -123,10 +123,13 @@ az role assignment list \
 
 `deploy.ps1` handles the complete deployment in one command — including creating any missing route tables across all resource groups. Run `Get-Help .\deploy.ps1` for full usage.
 
+`deploy.ps1` requires a `-SubscriptionId` argument, verifies it matches `subscriptionId` in the parameters file, then sets Azure CLI context before running deployment commands.
+
 ```powershell
 .\deploy.ps1 `
     -ParametersFile infra/main.testing.parameters.json `
-    -ResourceGroup rg-udr-m365-automation-testing
+    -ResourceGroup <resource-group> `
+    -SubscriptionId <subscription-id>
 ```
 
 ---
@@ -167,6 +170,23 @@ Use different values per environment for at least:
 This keeps test and production state/log data isolated.
 
 For customer deployments, copy `infra/main.customer.parameters.template.json` to a customer-specific parameters file and fill in the customer subscription, region, function app name, storage account name, and all route tables.
+
+### Customer onboarding (recommended)
+
+Use one Function App deployment per customer subscription.
+
+- Keep each customer isolated to one subscription and one Function App.
+- Use `ROUTE_TABLE_NAMES` only for route tables in that same subscription.
+- For tables in other resource groups, grant the Function App managed identity `Network Contributor` on each resource group.
+- Let customers update only operational app settings (for example `M365_ROUTE_SYNC_SCHEDULE` and `ROUTE_TABLE_NAMES`) in the portal.
+- Keep the customer parameters file in source control and update it after any portal-only change so future redeployments stay in sync.
+
+Customer handoff checklist:
+
+- Confirm route tables exist.
+- Confirm RBAC on every route-table resource group.
+- Run one manual trigger and verify the latest run-log has no table-level errors.
+- Confirm `M365_ROUTE_SYNC_SCHEDULE` is set to the agreed UTC schedule.
 
 | Parameter | Description | Required |
 |-----------|-------------|----------|
@@ -258,6 +278,8 @@ For a customer handoff, run one manual trigger after deployment and inspect the 
 The function schedule is controlled by the app setting `M365_ROUTE_SYNC_SCHEDULE`. The default deployment value is midnight UTC daily (`0 0 0 * * *`).
 
 To change run time without redeploying code: Function App -> Settings -> Environment variables -> update `M365_ROUTE_SYNC_SCHEDULE` -> Save -> Restart.
+
+![Function App environment variables example](image/envvars.png)
 
 ---
 
