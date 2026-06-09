@@ -84,6 +84,11 @@ Write-Ok "Function app : $functionApp"
 Write-Ok "Subscription : $SubscriptionId"
 Write-Ok "Route tables : $rtNames"
 
+# Pre-flight: fail fast if the zip is missing (saves 5+ minutes of infra work)
+if (-not $SkipZipDeploy -and -not (Test-Path $ZipPath)) {
+    throw "Zip file not found: $ZipPath`nBuild it first:`n  pip install --target .python_packages/lib/site-packages -r requirements.txt --platform manylinux2014_x86_64 --python-version 311 --only-binary=:all:`n  Compress-Archive -Path function_app.py,host.json,requirements.txt,shared,.python_packages -DestinationPath function.zip -Force"
+}
+
 # ---------------------------------------------------------------------------
 # 1a. Enforce Azure subscription context from parameters file
 # ---------------------------------------------------------------------------
