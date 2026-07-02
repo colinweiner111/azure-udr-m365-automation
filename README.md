@@ -1,27 +1,34 @@
-# Azure UDR M365 Automation
+# Azure UDR M365 & Intune Automation
 
 Keeps Azure Route Tables synchronized with Microsoft 365 IP ranges so M365 traffic (Teams, Exchange, SharePoint) bypasses your security appliance and routes directly to the internet — automatically, daily.
 
 **How it works:** An Azure Function fetches the [M365 endpoint API](https://learn.microsoft.com/en-us/microsoft-365/enterprise/microsoft-365-ip-web-service) daily, diffs the results against saved state, and adds/removes UDRs in your route tables. It also detects and restores routes that were manually deleted (drift detection). All runs are logged as JSON blobs in Azure Storage for audit.
 
-The same Function App includes a second timer (`update_intune_routes`) for Intune traffic. The live CIDR list is parsed directly from the [MicrosoftDocs/memdocs](https://github.com/MicrosoftDocs/memdocs) GitHub repo on every run — no redeploy needed when Microsoft updates endpoints. `shared/intune_api.py` serves as a hardcoded last-resort fallback if GitHub is unreachable.
+The same Function App includes a second timer (`update_intune_routes`) for Intune traffic. The function checks the [MicrosoftDocs/memdocs](https://github.com/MicrosoftDocs/memdocs) GitHub repo on every run and updates the stored CIDR list automatically when Microsoft changes the endpoint file — no redeploy required. `shared/intune_api.py` serves as a hardcoded last-resort fallback if GitHub is unreachable.
 
 > **Intune FQDN limitation:** UDRs route by IP only. Intune endpoints such as `*.manage.microsoft.com` and `*.dm.microsoft.com` are FQDN-only — not covered by UDRs. Configure Zscaler bypass (passthrough, not inspection) for those FQDNs separately. UDRs for IPs + Zscaler bypass for FQDNs = complete Intune traffic breakout.
 
-> **When NOT to use this:** If your security appliance supports FQDN/URL-based filtering (e.g., Zscaler URL policies), that is the preferred Microsoft approach for both M365 and Intune traffic. Use UDR-based routing only when IP-based routing is required.
+> **When NOT to use this:** If your security appliance supports FQDN/URL-based filtering (e.g., Zscaler URL policies), that is generally the cleaner approach where supported. Use UDR-based routing only when IP-based routing is required.
 
 ---
 
 ## Table of Contents
 
 - [Why these routes?](#why-these-routes)
+  - [M365](#m365)
+  - [Intune](#intune)
 - [Prerequisites](#prerequisites)
 - [Deploy](#deploy)
+  - [Quick deploy with deploy.ps1](#quick-deploy-with-deployps1-recommended)
+  - [Key parameters](#key-parameters)
+  - [Manual deployment and upgrades](#manual-deployment-and-upgrades)
 - [Schedule configuration](#schedule-configuration)
 - [Trigger manually](#trigger-manually)
 - [Run logs](#run-logs)
 - [Troubleshooting](#troubleshooting)
+- [Additional docs](#additional-docs)
 - [References](#references)
+- [License](#license)
 
 ---
 
@@ -45,7 +52,7 @@ Microsoft classifies M365 traffic into [three categories](https://learn.microsof
 
 The Intune IP list comes from the **"IP Subnets"** block in the [Intune consolidated endpoint list](https://learn.microsoft.com/en-us/mem/intune/fundamentals/intune-endpoints) (IPv4 only — ~85 CIDRs). It covers Intune device management services, Windows Update for Business, Microsoft Defender for Endpoint, and related Microsoft cloud services.
 
-**Why not Azure Service Tags?** The `MicrosoftIntune` tag returns ~4 CIDRs vs. ~85 in the consolidated list. Using Service Tags leaves most Intune traffic routing through the NVA.
+**Why not Azure Service Tags?** In testing, the `MicrosoftIntune` Service Tag returned only a small subset of the consolidated Intune CIDRs, so this project uses the published Intune endpoint list instead.
 
 **How the list stays current:** Each daily sync compares the commit SHA of `endpoints.md` in the MicrosoftDocs GitHub repo against the last-known SHA stored in blob. When a change is detected, the function re-parses the file and writes the updated list to blob immediately — no redeploy needed.
 
@@ -53,7 +60,7 @@ The Intune IP list comes from the **"IP Subnets"** block in the [Intune consolid
 
 ## Prerequisites
 
-- Azure subscription with Contributor + User Access Administrator (or Owner) on the target resource group
+- Azure subscription with Contributor + User Access Administrator (or Owner) on the deployment resource group. For cross-RG route tables, you also need permission to assign Network Contributor on each additional route-table resource group.
 - PowerShell 7+ for `deploy.ps1`, or use [Azure Cloud Shell](https://shell.azure.com)
 - The deployment resource group must exist before running `deploy.ps1`
 - Route tables do **not** need to be pre-created — `deploy.ps1` creates any missing ones automatically
@@ -98,7 +105,7 @@ Bicep assigns these automatically within the deployment resource group. For cros
 | `m365Categories` | M365 categories to sync | Default: `Optimize,Allow` |
 | `intuneRouteTableNames` | Route tables for Intune routes | Default: same as `routeTableNames` |
 
-For manual deployment steps or upgrading an existing M365-only deployment, see:
+### Manual deployment and upgrades
 
 - [docs/deployment.md](docs/deployment.md) — Full manual steps and RBAC deep-dive
 - [docs/upgrading.md](docs/upgrading.md) — Upgrading from M365-only to M365 + Intune
@@ -146,7 +153,7 @@ az rest --method post \
 
 ## Run logs
 
-Each run writes a JSON blob to `run-logs/<service>/YYYY/MM/DD/HH-MM-SS.json`.
+Each run writes a JSON blob to `run-logs/<service>/YYYY/MM/DD/HH-MM-SS.json`. The example below is abbreviated — full schema including `added`, `removed`, and `drift_restored` fields is in [docs/operations.md](docs/operations.md#run-log-schema).
 
 ![run-logs container showing intune and m365 folders](image/runlogs.png)
 
@@ -189,6 +196,14 @@ Quick checks: `result` is `success` or `no_change`; counters look expected; no t
 **Will the function remove my custom routes?** — No. Only routes matching M365 or Intune published CIDRs are managed. Routes with prefixes outside those lists are never touched.
 
 Full troubleshooting list in [docs/operations.md](docs/operations.md#troubleshooting).
+
+---
+
+## Additional docs
+
+- [Full deployment guide](docs/deployment.md)
+- [Upgrade from M365-only deployment](docs/upgrading.md)
+- [Operations and troubleshooting](docs/operations.md)
 
 ---
 
