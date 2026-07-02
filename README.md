@@ -8,7 +8,7 @@ The same Function App includes a second timer (`update_intune_routes`) for Intun
 
 > **Intune FQDN limitation:** UDRs route by IP only. Intune endpoints such as `*.manage.microsoft.com` and `*.dm.microsoft.com` are FQDN-only — not covered by UDRs. Configure Zscaler bypass (passthrough, not inspection) for those FQDNs separately. UDRs for IPs + Zscaler bypass for FQDNs = complete Intune traffic breakout.
 
-> **When NOT to use this:** If your security appliance supports FQDN/URL-based filtering (e.g., Zscaler URL policies), that is the preferred Microsoft approach. Use UDR-based routing only when IP-based routing is required.
+> **When NOT to use this:** If your security appliance supports FQDN/URL-based filtering (e.g., Zscaler URL policies), that is the preferred Microsoft approach for both M365 and Intune traffic. Use UDR-based routing only when IP-based routing is required.
 
 ---
 
